@@ -865,10 +865,13 @@ with tab3:
             st.markdown("#### Prediction Statistics")
             
             stats = metrics['stats']
+            correct_percent = (stats['correct']/stats['total']*100) if stats['total'] > 0 else 0
+            corrected_percent = (stats['corrected']/stats['total']*100) if stats['total'] > 0 else 0
+            
             st.markdown(f"""
             - **Total predictions:** {stats['total']}
-            - **Correct predictions:** {stats['correct']} ({(stats['correct']/stats['total']*100):.1f}% if total > 0 else 0}%)
-            - **Corrected predictions:** {stats['corrected']} ({(stats['corrected']/stats['total']*100):.1f}% if total > 0 else 0}%)
+            - **Correct predictions:** {stats['correct']} ({correct_percent:.1f}%)
+            - **Corrected predictions:** {stats['corrected']} ({corrected_percent:.1f}%)
             """)
         
         # Corrected examples analysis
