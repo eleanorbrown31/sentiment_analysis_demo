@@ -244,12 +244,13 @@ class SentimentModel:
         confidence = score * 100 if score > 0.5 else (1 - score) * 100
         
         prediction = {
-            'id': int(time.time() * 1000),
+            'id': int(time.time() * 1000) + random.randint(0, 999),  # Add randomness to avoid duplicate IDs
             'text': text,
             'sentiment': predicted_sentiment,
             'confidence': confidence,
             'score': score,
-            'added_to_training': False
+            'added_to_training': False,
+            'corrected': False
         }
         
         return prediction
@@ -291,6 +292,107 @@ class SentimentModel:
         if len(self.training_data) <= n:
             return self.training_data
         return self.training_data[:n]
+    
+    def evaluate_model_performance(self, submissions):
+        """Calculate model performance metrics based on user feedback"""
+        if not submissions:
+            return {
+                "accuracy": 0,
+                "positive_accuracy": 0,
+                "negative_accuracy": 0,
+                "confusion_matrix": {"tp": 0, "tn": 0, "fp": 0, "fn": 0},
+                "stats": {"total": 0, "corrected": 0, "correct": 0}
+            }
+        
+        corrected_submissions = [s for s in submissions if s.get('corrected', False)]
+        
+        # Count total, corrected, and correct examples
+        total = len(submissions)
+        corrected = len(corrected_submissions)
+        correct = total - corrected
+        
+        # Calculate accuracy
+        accuracy = correct / total if total > 0 else 0
+        
+        # Initialize confusion matrix
+        tp, tn, fp, fn = 0, 0, 0, 0
+        
+        # Count positive and negative examples
+        positive_total = sum(1 for s in submissions if s['sentiment'] == 'positive')
+        negative_total = sum(1 for s in submissions if s['sentiment'] == 'negative')
+        
+        # For corrected submissions, count confusion matrix
+        for s in corrected_submissions:
+            orig = s.get('originalSentiment', '')
+            curr = s.get('sentiment', '')
+            
+            if orig == 'positive' and curr == 'negative':
+                # Was positive, should be negative (false positive)
+                fp += 1
+            elif orig == 'negative' and curr == 'positive':
+                # Was negative, should be positive (false negative)
+                fn += 1
+        
+        # Calculate true positives and true negatives
+        tp = positive_total - fn
+        tn = negative_total - fp
+        
+        # Calculate positive and negative accuracy
+        positive_accuracy = tp / (tp + fp) if (tp + fp) > 0 else 0
+        negative_accuracy = tn / (tn + fn) if (tn + fn) > 0 else 0
+        
+        return {
+            "accuracy": accuracy,
+            "positive_accuracy": positive_accuracy,
+            "negative_accuracy": negative_accuracy,
+            "confusion_matrix": {"tp": tp, "tn": tn, "fp": fp, "fn": fn},
+            "stats": {"total": total, "corrected": corrected, "correct": correct}
+        }
+    
+    def get_top_feature_importance(self, n=10):
+        """Get the top n most important features (words) for classification"""
+        if not self.word_weights:
+            return []
+        
+        # Get all words except bias term
+        word_weights = [(word, weight) for word, weight in self.word_weights.items() 
+                        if word != '__bias__']
+        
+        # Sort by absolute weight
+        word_weights.sort(key=lambda x: abs(x[1]), reverse=True)
+        
+        # Return top n
+        return word_weights[:n]
+        
+    def get_confusion_terms(self, submissions):
+        """Identify terms that commonly lead to misclassification"""
+        if not submissions:
+            return {"false_positive": [], "false_negative": []}
+        
+        # Get corrected submissions
+        corrected = [s for s in submissions if s.get('corrected', False)]
+        
+        false_positives = []
+        false_negatives = []
+        
+        # Collect words from misclassified examples
+        for s in corrected:
+            words = re.sub(r'[^\w\s]', '', s['text'].lower()).split()
+            
+            if s.get('originalSentiment') == 'positive' and s['sentiment'] == 'negative':
+                false_positives.extend(words)
+            elif s.get('originalSentiment') == 'negative' and s['sentiment'] == 'positive':
+                false_negatives.extend(words)
+        
+        # Count frequencies
+        fp_counter = Counter(false_positives)
+        fn_counter = Counter(false_negatives)
+        
+        # Return top 5 most common terms for each category
+        return {
+            "false_positive": fp_counter.most_common(5),
+            "false_negative": fn_counter.most_common(5)
+        }
 
 # Initialize session state
 if 'model' not in st.session_state:
@@ -301,6 +403,10 @@ if 'training_history' not in st.session_state:
     st.session_state.training_history = []
 if 'sample_text' not in st.session_state:
     st.session_state.sample_text = ""
+if 'batch_results' not in st.session_state:
+    st.session_state.batch_results = []
+if 'batch_index' not in st.session_state:
+    st.session_state.batch_index = 0
 
 # App title and description
 st.title("Machine Learning Sentiment Analysis Demo")
@@ -313,7 +419,7 @@ This application demonstrates how machine learning works with a simple sentiment
 """)
 
 # Main layout with tabs
-tab1, tab2, tab3 = st.tabs(["Training", "Prediction", "Results"])
+tab1, tab2, tab3 = st.tabs(["Training", "Prediction", "Results & Analysis"])
 
 # Training tab content
 with tab1:
@@ -398,220 +504,86 @@ with tab2:
     if not st.session_state.model.trained and not st.session_state.training_history:
         st.warning("Please train the model first before making predictions.")
     else:
-        # Sample text examples
-        sample_texts = [
-            "I really enjoyed this presentation!",
-            "This is confusing and hard to follow",
-            "The examples are very clear and helpful",
-            "I'm not learning anything new",
-            "This demonstration is fascinating"
-        ]
+        # Create tabs for single vs batch prediction
+        pred_tab1, pred_tab2 = st.tabs(["Single Prediction", "Batch Testing"])
         
-        # Handle the "Try a Sample" button
-        if st.button("Try a Sample"):
-            st.session_state.sample_text = random.choice(sample_texts)
-        
-        # Text input for prediction
-        user_input = st.text_input("Enter text to analyse:", value=st.session_state.sample_text)
-        
-        # Make prediction
-        if st.button("Analyse") and user_input:
-            prediction = st.session_state.model.predict(user_input)
+        # Single prediction tab
+        with pred_tab1:
+            # Sample text examples
+            sample_texts = [
+                "I really enjoyed this presentation!",
+                "This is confusing and hard to follow",
+                "The examples are very clear and helpful",
+                "I'm not learning anything new",
+                "This demonstration is fascinating"
+            ]
             
-            if prediction:
-                # Add to submissions list
-                st.session_state.submissions.append(prediction)
+            # Handle the "Try a Sample" button
+            if st.button("Try a Sample", key="single_sample_btn"):
+                st.session_state.sample_text = random.choice(sample_texts)
+            
+            # Text input for prediction
+            user_input = st.text_input("Enter text to analyse:", value=st.session_state.sample_text)
+            
+            # Make prediction
+            if st.button("Analyse", key="single_analyse_btn") and user_input:
+                prediction = st.session_state.model.predict(user_input)
                 
-                # Display prediction result
-                st.markdown("### Prediction Result:")
-                
-                sentiment_color = "green" if prediction['sentiment'] == 'positive' else "red"
-                
-                st.markdown(
-                    f"""
-                    <div style="border: 1px solid {sentiment_color}; border-radius: 5px; padding: 15px; 
-                         background-color: rgba({0 if sentiment_color=='green' else 255}, {255 if sentiment_color=='green' else 0}, 0, 0.1)">
-                        <p style="font-size: 16px">"{prediction['text']}"</p>
-                        <p>Sentiment: <b>{prediction['sentiment']}</b></p>
-                        <p>Confidence: <b>{prediction['confidence']:.1f}%</b></p>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                
-                # Show important words
-                important_words = st.session_state.model.get_important_words(user_input)
-                
-                if important_words:
-                    st.markdown("#### Important words that influenced the prediction:")
+                if prediction:
+                    # Add to submissions list
+                    st.session_state.submissions.append(prediction)
                     
-                    word_html = ""
-                    for word_info in important_words:
-                        word = word_info['word']
-                        weight = word_info['weight']
-                        impact = word_info['impact']
-                        
-                        word_color = "green" if impact == 'positive' else "red"
-                        weight_sign = '+' if weight > 0 else ''
-                        
-                        word_html += f"""
-                        <span style="background-color: rgba({0 if word_color=='green' else 255}, {255 if word_color=='green' else 0}, 0, 0.2); 
-                               padding: 3px 8px; margin: 2px; border-radius: 12px; display: inline-block;">
-                            {word} ({weight_sign}{weight:.2f})
-                        </span>
-                        """
+                    # Display prediction result
+                    st.markdown("### Prediction Result:")
                     
-                    st.markdown(f"<div>{word_html}</div>", unsafe_allow_html=True)
-                
-                # Feedback buttons
-                st.markdown("#### Provide feedback to improve the model:")
-                
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    if st.button("✓ This is correct", key="correct_button"):
-                        # Add to training data with current label
-                        st.session_state.model.add_to_training(prediction['text'], prediction['sentiment'])
+                    sentiment_color = "green" if prediction['sentiment'] == 'positive' else "red"
+                    
+                    st.markdown(
+                        f"""
+                        <div style="border: 1px solid {sentiment_color}; border-radius: 5px; padding: 15px; 
+                             background-color: rgba({0 if sentiment_color=='green' else 255}, {255 if sentiment_color=='green' else 0}, 0, 0.1)">
+                            <p style="font-size: 16px">"{prediction['text']}"</p>
+                            <p>Sentiment: <b>{prediction['sentiment']}</b></p>
+                            <p>Confidence: <b>{prediction['confidence']:.1f}%</b></p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+                    
+                    # Show important words
+                    important_words = st.session_state.model.get_important_words(user_input)
+                    
+                    if important_words:
+                        st.markdown("#### Important words that influenced the prediction:")
                         
-                        # Update the submission's status
-                        for i, submission in enumerate(st.session_state.submissions):
-                            if submission['id'] == prediction['id']:
-                                st.session_state.submissions[i]['added_to_training'] = True
+                        word_html = ""
+                        for word_info in important_words:
+                            word = word_info['word']
+                            weight = word_info['weight']
+                            impact = word_info['impact']
+                            
+                            word_color = "green" if impact == 'positive' else "red"
+                            weight_sign = '+' if weight > 0 else ''
+                            
+                            word_html += f"""
+                            <span style="background-color: rgba({0 if word_color=='green' else 255}, {255 if word_color=='green' else 0}, 0, 0.2); 
+                                   padding: 3px 8px; margin: 2px; border-radius: 12px; display: inline-block;">
+                                {word} ({weight_sign}{weight:.2f})
+                            </span>
+                            """
                         
-                        st.success("Added to training data with current label!")
-                
-                with col2:
-                    if prediction['sentiment'] == 'positive':
-                        if st.button("✗ This is actually negative", key="wrong_button"):
-                            # Add to training data with corrected label
-                            st.session_state.model.add_to_training(prediction['text'], 'negative')
+                        st.markdown(f"<div>{word_html}</div>", unsafe_allow_html=True)
+                    
+                    # Feedback buttons
+                    st.markdown("#### Provide feedback to improve the model:")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if st.button("✓ This is correct", key="correct_button_single"):
+                            # Add to training data with current label
+                            st.session_state.model.add_to_training(prediction['text'], prediction['sentiment'])
                             
                             # Update the submission's status
                             for i, submission in enumerate(st.session_state.submissions):
                                 if submission['id'] == prediction['id']:
-                                    st.session_state.submissions[i]['added_to_training'] = True
-                                    st.session_state.submissions[i]['corrected'] = True
-                                    st.session_state.submissions[i]['originalSentiment'] = submission['sentiment']
-                                    st.session_state.submissions[i]['sentiment'] = 'negative'
-                            
-                            st.success("Added to training data with corrected label!")
-                    else:
-                        if st.button("✗ This is actually positive", key="wrong_button"):
-                            # Add to training data with corrected label
-                            st.session_state.model.add_to_training(prediction['text'], 'positive')
-                            
-                            # Update the submission's status
-                            for i, submission in enumerate(st.session_state.submissions):
-                                if submission['id'] == prediction['id']:
-                                    st.session_state.submissions[i]['added_to_training'] = True
-                                    st.session_state.submissions[i]['corrected'] = True
-                                    st.session_state.submissions[i]['originalSentiment'] = submission['sentiment']
-                                    st.session_state.submissions[i]['sentiment'] = 'positive'
-                            
-                            st.success("Added to training data with corrected label!")
-
-# Results tab content
-with tab3:
-    st.header("Analysis Results")
-    
-    if not st.session_state.submissions:
-        st.info("Make some predictions to see results here.")
-    else:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("### Sentiment Distribution")
-            
-            # Count positives and negatives
-            positive_count = sum(1 for s in st.session_state.submissions if s['sentiment'] == 'positive')
-            negative_count = sum(1 for s in st.session_state.submissions if s['sentiment'] == 'negative')
-            
-            # Create pie chart
-            fig, ax = plt.subplots(figsize=(4, 4))
-            
-            labels = ['Positive', 'Negative']
-            sizes = [positive_count, negative_count]
-            colors = ['#4CAF50', '#F44336']
-            
-            if positive_count > 0 or negative_count > 0:  # Only show chart if we have data
-                ax.pie(sizes, labels=labels, colors=colors, autopct='%1.1f%%', startangle=90)
-                ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle
-                st.pyplot(fig)
-            
-            # Add a retraining button
-            if len(st.session_state.model.training_data) > 25:  # Show only if we've added new data
-                if st.button("Retrain Model with Feedback", key="retrain_button"):
-                    st.info("Retraining model with all feedback data...")
-                    
-                    # Create progress indicators
-                    progress_bar = st.progress(0)
-                    status_text = st.empty()
-                    
-                    # Define callback for training progress
-                    def update_progress(epoch, total_epochs, accuracy, history):
-                        progress = epoch / total_epochs
-                        progress_bar.progress(progress)
-                        status_text.text(f"Epoch {epoch}/{total_epochs} - Accuracy: {accuracy*100:.1f}%")
-                        st.session_state.training_history = history
-                    
-                    # Train the model
-                    st.session_state.model.train(epochs=20, callback=update_progress)
-                    
-                    st.success("Model retrained with all feedback incorporated!")
-        
-        with col2:
-            st.markdown("### Recent Submissions")
-            
-            # Show the 5 most recent submissions in reverse order
-            for item in list(reversed(st.session_state.submissions))[:5]:
-                sentiment_color = "green" if item['sentiment'] == 'positive' else "red"
-                
-                # Create HTML for each submission
-                html = f"""
-                <div style="border: 1px solid {sentiment_color}; border-radius: 5px; padding: 10px; margin: 5px 0; 
-                     background-color: rgba({0 if sentiment_color=='green' else 255}, {255 if sentiment_color=='green' else 0}, 0, 0.1)">
-                    <p>{item['text']}</p>
-                    <p style="font-size: smaller">Sentiment: <b>{item['sentiment']}</b> ({item['confidence']:.1f}% confidence)
-                """
-                
-                # Add corrected indicator if applicable
-                if item.get('corrected'):
-                    original = item.get('originalSentiment', 'unknown')
-                    html += f'<span style="color: blue; margin-left: 10px;">(Corrected from {original})</span>'
-                
-                # Add training indicator if applicable
-                if item.get('added_to_training'):
-                    html += f"""
-                    <br><span style="color: green; display: flex; align-items: center; margin-top: 5px;">
-                        <svg width="16" height="16" viewBox="0 0 24 24" style="margin-right: 5px;">
-                            <path fill="green" d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"></path>
-                        </svg>
-                        Added to training data
-                    </span>
-                    """
-                
-                html += "</p></div>"
-                
-                st.markdown(html, unsafe_allow_html=True)
-
-    # Learning Cycle Explanation
-    st.markdown("""
-    ### How This Shows Machine Learning
-
-    * We start with labelled training data (examples of positive and negative text)
-    * The model learns patterns from this data during training
-    * With each epoch, the model's accuracy typically improves
-    * The trained model can then analyse new text it hasn't seen before
-    * The model gives both a prediction and confidence score
-    * **Feedback loop:** When predictions are wrong, you can correct them
-    * **Model improvement:** Corrections are added to training data to improve future predictions
-    * **Continuous learning:** Retrain the model with enhanced dataset to improve accuracy
-
-    #### Interactive Learning Cycle
-    1. Make predictions on new text
-    2. Identify incorrect predictions
-    3. Provide feedback by marking correct sentiment
-    4. Add corrections to training data
-    5. Retrain model with enhanced dataset
-    6. Observe improved accuracy on similar future inputs
-    """)
