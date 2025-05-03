@@ -692,8 +692,7 @@ with tab2:
                                         st.session_state.submissions[i]['sentiment'] = 'positive'
                                 
                                 st.success("Added to training data with corrected label!")
-        # Batch prediction tab
-# Batch prediction tab
+       # Batch prediction tab
 with pred_tab2:
     st.markdown("### Batch Testing")
     st.markdown("""
@@ -742,18 +741,24 @@ with pred_tab2:
         
         # Save results to session state
         st.session_state.batch_results = batch_results
+        
+        # Initialize feedback selections dictionary if not already present
+        if 'batch_selections' not in st.session_state:
+            st.session_state.batch_selections = {}
+            
+        # Initialize empty selections for this batch
+        for example in batch_results:
+            example_id = str(example['id'])
+            if example_id not in st.session_state.batch_selections:
+                st.session_state.batch_selections[example_id] = 'none'
     
-    # Display batch results as a table with feedback options
+    # Display batch results as a table with selection options
     if st.session_state.batch_results:
         st.markdown("### Batch Analysis Results")
-        st.markdown("Review the predictions and provide feedback below:")
-        
-        # Initialize feedback tracking in session state if not already present
-        if 'batch_feedback' not in st.session_state:
-            st.session_state.batch_feedback = {}
+        st.markdown("Review each prediction and select the correct option. Submit your feedback when complete:")
         
         # Table headers
-        col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+        col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 2, 2])
         with col1:
             st.markdown("**Text**")
         with col2:
@@ -765,17 +770,12 @@ with pred_tab2:
         with col5:
             st.markdown("**Incorrect ✗**")
         
-        # Display each example with feedback options
-        for i, example in enumerate(st.session_state.batch_results):
-            example_id = example['id']
-            feedback_key = f"feedback_{example_id}"
+        # Iterate through each example to display selection options
+        for example in st.session_state.batch_results:
+            example_id = str(example['id'])
             
-            # Get any existing feedback
-            is_corrected = example.get('corrected', False)
-            is_added = example.get('added_to_training', False)
-            
-            # Display example with feedback buttons
-            col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 1, 1])
+            # Create columns for this example
+            col1, col2, col3, col4, col5 = st.columns([3, 1, 1, 2, 2])
             
             with col1:
                 # Truncate text if too long for display
@@ -794,124 +794,147 @@ with pred_tab2:
             with col3:
                 st.markdown(f"{example['confidence']:.1f}%")
             
-            with col4:
-                # Correct button - disabled if already has feedback
-                correct_disabled = is_added or is_corrected
-                if st.button("✓", key=f"correct_{example_id}", disabled=correct_disabled):
-                    # Mark as correct and add to training
-                    st.session_state.batch_results[i]['added_to_training'] = True
-                    st.session_state.batch_feedback[example_id] = "correct"
-                    
-                    # Add to submissions and training data
-                    st.session_state.submissions.append(example)
-                    st.session_state.model.add_to_training(
-                        example['text'], 
-                        example['sentiment']
-                    )
-                    st.experimental_rerun()
-            
-            with col5:
-                # Incorrect button - disabled if already has feedback
-                if st.button("✗", key=f"incorrect_{example_id}", disabled=correct_disabled):
-                    # Open expander for correction
-                    st.session_state.batch_feedback[example_id] = "incorrect"
-                    st.experimental_rerun()
-            
-            # If marked incorrect, show correction options
-            if st.session_state.batch_feedback.get(example_id) == "incorrect" and not is_corrected:
-                corrected_sentiment = "negative" if example['sentiment'] == 'positive' else 'positive'
+            # Create a radio button for correct/incorrect selection
+            with col4, col5:
+                selection_options = [
+                    ('correct', 'Correct'),
+                    ('incorrect', 'Incorrect')
+                ]
                 
-                correction_col1, correction_col2 = st.columns([4, 1])
-                with correction_col1:
-                    st.markdown(f"Correct sentiment for: **{example['text']}**")
-                with correction_col2:
-                    if st.button(f"Mark as {corrected_sentiment}", key=f"confirm_{example_id}"):
-                        # Create corrected version
-                        corrected_example = dict(example)
-                        corrected_example['corrected'] = True
-                        corrected_example['originalSentiment'] = corrected_example['sentiment']
-                        corrected_example['sentiment'] = corrected_sentiment
-                        
-                        # Add to submissions and training data
-                        st.session_state.submissions.append(corrected_example)
-                        st.session_state.model.add_to_training(corrected_example['text'], corrected_sentiment)
-                        
-                        # Update batch results
-                        st.session_state.batch_results[i]['added_to_training'] = True
-                        st.session_state.batch_results[i]['corrected'] = True
-                        st.session_state.batch_results[i]['sentiment'] = corrected_sentiment
-                        
-                        # Update feedback state
-                        st.session_state.batch_feedback[example_id] = "corrected"
-                        st.experimental_rerun()
+                # Get selection value (default to 'none' which means no selection)
+                current_selection = st.session_state.batch_selections.get(example_id, 'none')
+                
+                # Use horizontal radio buttons
+                col4_width, col5_width = st.columns(2)
+                with col4_width:
+                    if st.checkbox("Correct", key=f"correct_{example_id}", 
+                                  value=(current_selection == 'correct')):
+                        st.session_state.batch_selections[example_id] = 'correct'
+                        # Uncheck the other option if this one is checked
+                        if current_selection == 'incorrect':
+                            st.session_state.batch_selections[example_id] = 'correct'
+                            st.experimental_rerun()
+                
+                with col5_width:
+                    if st.checkbox("Incorrect", key=f"incorrect_{example_id}", 
+                                  value=(current_selection == 'incorrect')):
+                        st.session_state.batch_selections[example_id] = 'incorrect'
+                        # Uncheck the other option if this one is checked
+                        if current_selection == 'correct':
+                            st.session_state.batch_selections[example_id] = 'incorrect'
+                            st.experimental_rerun()
+            
+            # If marked incorrect, provide option to choose correct sentiment
+            if st.session_state.batch_selections.get(example_id) == 'incorrect':
+                corrected_sentiment = "positive" if example['sentiment'] == 'negative' else 'negative'
+                correction_col = st.columns([4, 2])
+                with correction_col[1]:
+                    # Store the corrected sentiment
+                    st.session_state.batch_selections[f"{example_id}_correction"] = corrected_sentiment
+                    st.markdown(f"Will be marked as: **{corrected_sentiment}**")
             
             # Add a separator between examples
             st.markdown("---")
         
-        # Summary stats
-        correct_count = sum(1 for ex in st.session_state.batch_results if ex.get('added_to_training', False) and not ex.get('corrected', False))
-        corrected_count = sum(1 for ex in st.session_state.batch_results if ex.get('corrected', False))
-        pending_count = len(st.session_state.batch_results) - correct_count - corrected_count
+        # Count selections
+        correct_count = sum(1 for value in st.session_state.batch_selections.values() if value == 'correct')
+        incorrect_count = sum(1 for value in st.session_state.batch_selections.values() if value == 'incorrect')
+        total_examples = len(st.session_state.batch_results)
         
-        # Display summary stats
-        st.markdown("### Batch Feedback Summary")
+        # Display selection summary
         summary_col1, summary_col2, summary_col3 = st.columns(3)
         with summary_col1:
-            st.metric("Correct", correct_count)
+            st.metric("Marked Correct", correct_count)
         with summary_col2:
-            st.metric("Corrected", corrected_count)
+            st.metric("Marked Incorrect", incorrect_count)
         with summary_col3:
-            st.metric("Pending", pending_count)
+            st.metric("Not Selected", total_examples - correct_count - incorrect_count)
         
-        # Progress bar for feedback completion
-        feedback_progress = (correct_count + corrected_count) / len(st.session_state.batch_results)
-        st.progress(feedback_progress)
+        # Progress bar for selections
+        selection_progress = (correct_count + incorrect_count) / total_examples
+        st.progress(selection_progress)
         
-        # Add all remaining as correct button
-        if pending_count > 0:
-            if st.button("Add All Pending as Correct"):
-                for i, ex in enumerate(st.session_state.batch_results):
-                    if not ex.get('added_to_training', False) and not ex.get('corrected', False):
-                        # Add to submissions
-                        st.session_state.submissions.append(ex)
-                        
-                        # Add to training data with current label
-                        st.session_state.model.add_to_training(
-                            ex['text'], 
-                            ex['sentiment']
-                        )
-                        
-                        # Mark as added to training
-                        st.session_state.batch_results[i]['added_to_training'] = True
+        # Submit feedback button
+        if st.button("Submit All Feedback", disabled=(correct_count + incorrect_count == 0)):
+            # Process all selections
+            feedback_submitted = False
+            
+            for example in st.session_state.batch_results:
+                example_id = str(example['id'])
+                selection = st.session_state.batch_selections.get(example_id, 'none')
                 
-                # Clear feedback state to avoid confusion
-                st.session_state.batch_feedback = {}
+                if selection == 'correct':
+                    # Add to training data with current sentiment
+                    st.session_state.model.add_to_training(example['text'], example['sentiment'])
+                    
+                    # Add to submissions
+                    example['added_to_training'] = True
+                    st.session_state.submissions.append(example)
+                    feedback_submitted = True
+                    
+                elif selection == 'incorrect':
+                    # Get the corrected sentiment
+                    corrected_sentiment = "positive" if example['sentiment'] == 'negative' else 'negative'
+                    
+                    # Create a corrected copy
+                    corrected_example = dict(example)
+                    corrected_example['corrected'] = True
+                    corrected_example['originalSentiment'] = example['sentiment']
+                    corrected_example['sentiment'] = corrected_sentiment
+                    
+                    # Add to training data with corrected sentiment
+                    st.session_state.model.add_to_training(example['text'], corrected_sentiment)
+                    
+                    # Add to submissions
+                    corrected_example['added_to_training'] = True
+                    st.session_state.submissions.append(corrected_example)
+                    feedback_submitted = True
+            
+            # Show success message
+            if feedback_submitted:
+                st.success(f"Feedback submitted for {correct_count + incorrect_count} examples!")
+                
+                # Clear selections for a new batch
+                st.session_state.batch_selections = {}
+                
+                # Option to retrain
+                if st.button("Retrain Model with New Feedback"):
+                    # Progress tracking elements
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    
+                    # Define callback for training progress
+                    def update_progress(epoch, total_epochs, accuracy, history):
+                        progress = epoch / total_epochs
+                        progress_bar.progress(progress)
+                        status_text.text(f"Epoch {epoch}/{total_epochs} - Accuracy: {accuracy*100:.1f}%")
+                        st.session_state.training_history = history
+                    
+                    # Train the model
+                    st.session_state.model.train(epochs=10, callback=update_progress)
+                    st.success("Training completed with new feedback incorporated!")
+        
+        # Mark all as correct button
+        if total_examples - correct_count - incorrect_count > 0:
+            if st.button("Mark All Remaining as Correct"):
+                for example in st.session_state.batch_results:
+                    example_id = str(example['id'])
+                    if st.session_state.batch_selections.get(example_id, 'none') == 'none':
+                        st.session_state.batch_selections[example_id] = 'correct'
                 st.experimental_rerun()
         
-        # Button to start a new batch
+        # Clear selections button
+        if correct_count + incorrect_count > 0:
+            if st.button("Clear All Selections"):
+                st.session_state.batch_selections = {}
+                st.experimental_rerun()
+        
+        # New batch button
         if st.button("Start New Batch"):
             st.session_state.batch_results = []
             st.session_state.batch_text = ""
-            st.session_state.batch_feedback = {}
+            st.session_state.batch_selections = {}
             st.experimental_rerun()
-        
-        # Button to retrain after feedback
-        if correct_count + corrected_count > 0:
-            if st.button("Retrain Model with New Feedback"):
-                # Progress tracking elements
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                # Define callback for training progress
-                def update_progress(epoch, total_epochs, accuracy, history):
-                    progress = epoch / total_epochs
-                    progress_bar.progress(progress)
-                    status_text.text(f"Epoch {epoch}/{total_epochs} - Accuracy: {accuracy*100:.1f}%")
-                    st.session_state.training_history = history
-                
-                # Train the model
-                st.session_state.model.train(epochs=10, callback=update_progress)
-                st.success("Training completed with new feedback incorporated!")
 # Results tab content
 with tab3:
     st.header("Test Results & Analysis")
