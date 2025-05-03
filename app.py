@@ -587,3 +587,454 @@ with tab2:
                             # Update the submission's status
                             for i, submission in enumerate(st.session_state.submissions):
                                 if submission['id'] == prediction['id']:
+                                    st.session_state.submissions[i]['added_to_training'] = True
+                            
+                            st.success("Added to training data with current label!")
+                    
+                    with col2:
+                        if prediction['sentiment'] == 'positive':
+                            if st.button("✗ This is actually negative", key="wrong_button_single"):
+                                # Add to training data with corrected label
+                                st.session_state.model.add_to_training(prediction['text'], 'negative')
+                                
+                                # Update the submission's status
+                                for i, submission in enumerate(st.session_state.submissions):
+                                    if submission['id'] == prediction['id']:
+                                        st.session_state.submissions[i]['added_to_training'] = True
+                                        st.session_state.submissions[i]['corrected'] = True
+                                        st.session_state.submissions[i]['originalSentiment'] = submission['sentiment']
+                                        st.session_state.submissions[i]['sentiment'] = 'negative'
+                                
+                                st.success("Added to training data with corrected label!")
+                        else:
+                            if st.button("✗ This is actually positive", key="wrong_button_single"):
+                                # Add to training data with corrected label
+                                st.session_state.model.add_to_training(prediction['text'], 'positive')
+                                
+                                # Update the submission's status
+                                for i, submission in enumerate(st.session_state.submissions):
+                                    if submission['id'] == prediction['id']:
+                                        st.session_state.submissions[i]['added_to_training'] = True
+                                        st.session_state.submissions[i]['corrected'] = True
+                                        st.session_state.submissions[i]['originalSentiment'] = submission['sentiment']
+                                        st.session_state.submissions[i]['sentiment'] = 'positive'
+                                
+                                st.success("Added to training data with corrected label!")
+        
+        # Batch prediction tab
+        with pred_tab2:
+            st.markdown("### Batch Testing")
+            st.markdown("""
+            Test multiple examples at once to see how well your model performs. 
+            Enter up to 10 examples (one per line) or use random samples.
+            """)
+            
+            # Batch text input
+            batch_text = st.text_area(
+                "Enter up to 10 examples (one per line):", 
+                height=150,
+                placeholder="Enter one example per line or click 'Generate 10 Samples'"
+            )
+            
+            col1, col2 = st.columns([1, 1])
+            
+            with col1:
+                # Generate batch samples
+                if st.button("Generate 10 Samples"):
+                    batch_samples = [
+                        "This was very informative and helpful",
+                        "I didn't understand most of the examples",
+                        "The presentation was engaging and clear",
+                        "Too much information in too little time",
+                        "I learned a lot from this workshop",
+                        "The speaker seemed unprepared",
+                        "Great examples that made sense",
+                        "The content was too basic for me",
+                        "I'm excited to try these techniques",
+                        "The slides were confusing and cluttered"
+                    ]
+                    batch_text = "\n".join(batch_samples)
+                    # Force a rerun to update the text area
+                    st.experimental_rerun()
+            
+            with col2:
+                # Analyse batch
+                if st.button("Analyse Batch") and batch_text:
+                    # Split text into lines and filter out empty lines
+                    lines = [line.strip() for line in batch_text.split("\n") if line.strip()]
+                    
+                    # Limit to 10 examples
+                    lines = lines[:10]
+                    
+                    # Process each example
+                    batch_results = []
+                    for line in lines:
+                        prediction = st.session_state.model.predict(line)
+                        batch_results.append(prediction)
+                    
+                    # Save results to session state
+                    st.session_state.batch_results = batch_results
+                    st.session_state.batch_index = 0
+                    
+                    # Force a rerun to show the results
+                    st.experimental_rerun()
+            
+            # Display batch results
+            if st.session_state.batch_results:
+                st.markdown("### Batch Results")
+                
+                # Create a progress bar to show which example we're on
+                total_examples = len(st.session_state.batch_results)
+                current_index = st.session_state.batch_index
+                
+                st.progress((current_index + 1) / total_examples)
+                st.markdown(f"**Example {current_index + 1} of {total_examples}**")
+                
+                # Get current example
+                current_example = st.session_state.batch_results[current_index]
+                
+                # Display current example
+                sentiment_color = "green" if current_example['sentiment'] == 'positive' else "red"
+                
+                st.markdown(
+                    f"""
+                    <div style="border: 1px solid {sentiment_color}; border-radius: 5px; padding: 15px; 
+                         background-color: rgba({0 if sentiment_color=='green' else 255}, {255 if sentiment_color=='green' else 0}, 0, 0.1)">
+                        <p style="font-size: 16px">"{current_example['text']}"</p>
+                        <p>Sentiment: <b>{current_example['sentiment']}</b></p>
+                        <p>Confidence: <b>{current_example['confidence']:.1f}%</b></p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                
+                # Feedback buttons for batch
+                st.markdown("#### Is this prediction correct?")
+                
+                col1, col2, col3 = st.columns([1, 1, 1])
+                
+                with col1:
+                    if st.button("✓ Correct", key="correct_batch"):
+                        # Add example to submissions with current label
+                        st.session_state.submissions.append(current_example)
+                        
+                        # Add to training data
+                        st.session_state.model.add_to_training(
+                            current_example['text'], 
+                            current_example['sentiment']
+                        )
+                        
+                        # Mark as added to training
+                        st.session_state.batch_results[current_index]['added_to_training'] = True
+                        
+                        # Move to next example
+                        if current_index < total_examples - 1:
+                            st.session_state.batch_index += 1
+                            st.experimental_rerun()
+                        else:
+                            st.success("You've reviewed all examples!")
+                
+                with col2:
+                    # Add negative feedback
+                    if current_example['sentiment'] == 'positive':
+                        if st.button("✗ Actually Negative", key="negative_batch"):
+                            # Create corrected version
+                            corrected_example = dict(current_example)
+                            corrected_example['corrected'] = True
+                            corrected_example['originalSentiment'] = corrected_example['sentiment']
+                            corrected_example['sentiment'] = 'negative'
+                            
+                            # Add to submissions and training data
+                            st.session_state.submissions.append(corrected_example)
+                            st.session_state.model.add_to_training(corrected_example['text'], 'negative')
+                            
+                            # Mark as added
+                            st.session_state.batch_results[current_index]['added_to_training'] = True
+                            st.session_state.batch_results[current_index]['corrected'] = True
+                            
+                            # Move to next example
+                            if current_index < total_examples - 1:
+                                st.session_state.batch_index += 1
+                                st.experimental_rerun()
+                            else:
+                                st.success("You've reviewed all examples!")
+                    else:
+                        if st.button("✗ Actually Positive", key="positive_batch"):
+                            # Create corrected version
+                            corrected_example = dict(current_example)
+                            corrected_example['corrected'] = True
+                            corrected_example['originalSentiment'] = corrected_example['sentiment']
+                            corrected_example['sentiment'] = 'positive'
+                            
+                            # Add to submissions and training data
+                            st.session_state.submissions.append(corrected_example)
+                            st.session_state.model.add_to_training(corrected_example['text'], 'positive')
+                            
+                            # Mark as added
+                            st.session_state.batch_results[current_index]['added_to_training'] = True
+                            st.session_state.batch_results[current_index]['corrected'] = True
+                            
+                            # Move to next example
+                            if current_index < total_examples - 1:
+                                st.session_state.batch_index += 1
+                                st.experimental_rerun()
+                            else:
+                                st.success("You've reviewed all examples!")
+                
+                with col3:
+                    # Skip button
+                    if st.button("Skip", key="skip_batch"):
+                        if current_index < total_examples - 1:
+                            st.session_state.batch_index += 1
+                            st.experimental_rerun()
+                        else:
+                            st.info("You've reached the last example!")
+                
+                # Navigation buttons
+                nav_col1, nav_col2 = st.columns([1, 1])
+                with nav_col1:
+                    if current_index > 0:
+                        if st.button("Previous", key="prev_batch"):
+                            st.session_state.batch_index -= 1
+                            st.experimental_rerun()
+                with nav_col2:
+                    if current_index < total_examples - 1:
+                        if st.button("Next", key="next_batch"):
+                            st.session_state.batch_index += 1
+                            st.experimental_rerun()
+                
+                # Show batch summary
+                st.markdown("### Batch Summary")
+                
+                # Count completed examples
+                completed = sum(1 for ex in st.session_state.batch_results if ex.get('added_to_training', False))
+                
+                st.markdown(f"**Reviewed: {completed}/{total_examples}**")
+                
+                # Add to training button
+                if completed > 0 and completed < total_examples:
+                    if st.button("Add All Reviewed Examples to Training Data"):
+                        # Add all completed examples to submissions if not already there
+                        for ex in st.session_state.batch_results:
+                            if ex.get('added_to_training', False) and not any(s['id'] == ex['id'] for s in st.session_state.submissions):
+                                st.session_state.submissions.append(ex)
+                        
+                        st.success(f"Added {completed} examples to training data!")
+
+# Results tab content
+with tab3:
+    st.header("Results & Analysis")
+    
+    if not st.session_state.submissions:
+        st.info("Make some predictions first to see analysis here.")
+    else:
+        # Calculate model performance metrics
+        metrics = st.session_state.model.evaluate_model_performance(st.session_state.submissions)
+        
+        # Create columns for metrics
+        st.markdown("### Model Performance")
+        
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("Overall Accuracy", f"{metrics['accuracy']*100:.1f}%")
+        
+        with col2:
+            st.metric("Positive Accuracy", f"{metrics['positive_accuracy']*100:.1f}%")
+        
+        with col3:
+            st.metric("Negative Accuracy", f"{metrics['negative_accuracy']*100:.1f}%")
+        
+        # Add a more detailed metrics view
+        with st.expander("Detailed Performance Metrics"):
+            # Show confusion matrix
+            cm = metrics['confusion_matrix']
+            
+            st.markdown("#### Confusion Matrix")
+            
+            # Create a dataframe for the confusion matrix
+            cm_df = pd.DataFrame([
+                [cm['tp'], cm['fp']],
+                [cm['fn'], cm['tn']]
+            ], index=['Predicted Positive', 'Predicted Negative'], 
+               columns=['Actually Positive', 'Actually Negative'])
+            
+            st.dataframe(cm_df)
+            
+            # Add prediction statistics
+            st.markdown("#### Prediction Statistics")
+            
+            stats = metrics['stats']
+            st.markdown(f"""
+            - **Total predictions:** {stats['total']}
+            - **Correct predictions:** {stats['correct']} ({(stats['correct']/stats['total']*100):.1f}% if total > 0 else 0}%)
+            - **Corrected predictions:** {stats['corrected']} ({(stats['corrected']/stats['total']*100):.1f}% if total > 0 else 0}%)
+            """)
+        
+        # Corrected examples analysis
+        st.markdown("### Corrected Examples Analysis")
+        
+        # Find examples that were corrected
+        corrected_examples = [s for s in st.session_state.submissions if s.get('corrected', False)]
+        
+        if corrected_examples:
+            st.markdown(f"Found **{len(corrected_examples)}** examples where the model prediction was corrected:")
+            
+            for example in corrected_examples:
+                orig_sentiment = example.get('originalSentiment', 'unknown')
+                current_sentiment = example.get('sentiment', 'unknown')
+                orig_color = "green" if orig_sentiment == 'positive' else "red"
+                current_color = "green" if current_sentiment == 'positive' else "red"
+                
+                st.markdown(
+                    f"""
+                    <div style="border: 1px solid {current_color}; border-radius: 5px; padding: 10px; margin: 10px 0; 
+                         background-color: rgba({0 if current_color=='green' else 255}, {255 if current_color=='green' else 0}, 0, 0.1)">
+                        <p>"{example['text']}"</p>
+                        <p>
+                            <span style="color: {orig_color}">
+                                Initially predicted: <b>{orig_sentiment}</b> ({example['confidence']:.1f}% confidence)
+                            </span>
+                            <br>
+                            <span style="color: {current_color}">
+                                Corrected to: <b>{current_sentiment}</b>
+                            </span>
+                        </p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            
+            # Get features that commonly lead to confusion
+            confusion_terms = st.session_state.model.get_confusion_terms(st.session_state.submissions)
+            
+            st.markdown("#### Common Confusion Terms")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**False Positives (predicted positive but actually negative):**")
+                if confusion_terms['false_positive']:
+                    for term, count in confusion_terms['false_positive']:
+                        st.markdown(f"- {term} ({count} occurrences)")
+                else:
+                    st.markdown("*No data yet*")
+            
+            with col2:
+                st.markdown("**False Negatives (predicted negative but actually positive):**")
+                if confusion_terms['false_negative']:
+                    for term, count in confusion_terms['false_negative']:
+                        st.markdown(f"- {term} ({count} occurrences)")
+                else:
+                    st.markdown("*No data yet*")
+        else:
+            st.info("No corrected predictions yet. Provide feedback on predictions to see analysis here.")
+        
+        # Feature importance
+        st.markdown("### Feature Importance Analysis")
+        
+        # Get top features
+        top_features = st.session_state.model.get_top_feature_importance(n=15)
+        
+        if top_features:
+            # Split into positive and negative features
+            positive_features = [(word, weight) for word, weight in top_features if weight > 0]
+            negative_features = [(word, weight) for word, weight in top_features if weight < 0]
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.markdown("**Top Positive Features:**")
+                for word, weight in positive_features[:7]:
+                    st.markdown(
+                        f"""
+                        <div style="background-color: rgba(0, 255, 0, {min(abs(weight)*5, 0.3)}); 
+                             padding: 5px; margin: 2px; border-radius: 3px;">
+                            {word}: +{weight:.3f}
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+            
+            with col2:
+                st.markdown("**Top Negative Features:**")
+                for word, weight in negative_features[:7]:
+                    st.markdown(
+                        f"""
+                        <div style="background-color: rgba(255, 0, 0, {min(abs(weight)*5, 0.3)}); 
+                             padding: 5px; margin: 2px; border-radius: 3px;">
+                            {word}: {weight:.3f}
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
+        else:
+            st.info("Train the model first to see feature importance.")
+        
+        # Model improvement recommendations
+        st.markdown("### Model Improvement Recommendations")
+        
+        # Check if retraining is needed
+        retraining_needed = len(corrected_examples) >= 3
+        
+        # Accuracy threshold
+        good_accuracy = metrics['accuracy'] >= 0.8
+        
+        if not good_accuracy:
+            st.warning("""
+            **Model accuracy is below 80%**
+            
+            Consider these improvements:
+            1. Add more training examples, especially for cases where the model is confused
+            2. Retrain the model with more epochs
+            3. Review the confused terms above and provide more examples of those
+            """)
+        
+        if retraining_needed:
+            st.warning("""
+            **Multiple predictions have been corrected**
+            
+            The model would likely benefit from retraining with the new feedback.
+            """)
+            
+            if st.button("Retrain Model with Feedback", key="retrain_button"):
+                st.info("Retraining model with all feedback data...")
+                
+                # Create progress indicators
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+                
+                # Define callback for training progress
+                def update_progress(epoch, total_epochs, accuracy, history):
+                    progress = epoch / total_epochs
+                    progress_bar.progress(progress)
+                    status_text.text(f"Epoch {epoch}/{total_epochs} - Accuracy: {accuracy*100:.1f}%")
+                    st.session_state.training_history = history
+                
+                # Train the model
+                st.session_state.model.train(epochs=20, callback=update_progress)
+                
+                st.success("Model retrained with all feedback incorporated!")
+        
+        # Learning cycle explanation
+        st.markdown("""
+        ### How This Demonstrates Machine Learning
+        
+        This demo illustrates the core **training-testing-improvement** cycle of supervised ML:
+        
+        1. **Training Phase** - The model learns patterns from labeled examples
+        2. **Testing Phase** - The model makes predictions on new data
+        3. **Feedback Loop** - Human feedback corrects errors and improves the model
+        4. **Continuous Learning** - The model is retrained with new examples
+        
+        With each iteration of this cycle:
+        
+        - **Accuracy increases**: The model makes fewer mistakes as training examples grow
+        - **Feature importance evolves**: The model learns which words are most predictive
+        - **Confusion decreases**: The model learns from its mistakes 
+        - **Generalizes better**: The model performs well on new, unseen text
+        
+        This simulates how real-world ML systems improve through human feedback, but simplified
+        to make the process visible and interactive. In production systems, this feedback loop
+        can involve millions of examples and complex deep learning models.
+        """)
