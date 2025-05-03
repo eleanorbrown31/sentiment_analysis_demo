@@ -250,7 +250,8 @@ class SentimentModel:
             'confidence': confidence,
             'score': score,
             'added_to_training': False,
-            'corrected': False
+            'corrected': False,
+            'is_test': True  # Mark as test data, not training data
         }
         
         return prediction
@@ -295,7 +296,10 @@ class SentimentModel:
     
     def evaluate_model_performance(self, submissions):
         """Calculate model performance metrics based on user feedback"""
-        if not submissions:
+        # Filter to include only test submissions, not training data
+        test_submissions = [s for s in submissions if s.get('is_test', True)]
+        
+        if not test_submissions:
             return {
                 "accuracy": 0,
                 "positive_accuracy": 0,
@@ -304,10 +308,10 @@ class SentimentModel:
                 "stats": {"total": 0, "corrected": 0, "correct": 0}
             }
         
-        corrected_submissions = [s for s in submissions if s.get('corrected', False)]
+        corrected_submissions = [s for s in test_submissions if s.get('corrected', False)]
         
         # Count total, corrected, and correct examples
-        total = len(submissions)
+        total = len(test_submissions)
         corrected = len(corrected_submissions)
         correct = total - corrected
         
@@ -318,8 +322,8 @@ class SentimentModel:
         tp, tn, fp, fn = 0, 0, 0, 0
         
         # Count positive and negative examples
-        positive_total = sum(1 for s in submissions if s['sentiment'] == 'positive')
-        negative_total = sum(1 for s in submissions if s['sentiment'] == 'negative')
+        positive_total = sum(1 for s in test_submissions if s['sentiment'] == 'positive')
+        negative_total = sum(1 for s in test_submissions if s['sentiment'] == 'negative')
         
         # For corrected submissions, count confusion matrix
         for s in corrected_submissions:
@@ -366,11 +370,14 @@ class SentimentModel:
         
     def get_confusion_terms(self, submissions):
         """Identify terms that commonly lead to misclassification"""
-        if not submissions:
+        # Filter to include only test submissions
+        test_submissions = [s for s in submissions if s.get('is_test', True)]
+        
+        if not test_submissions:
             return {"false_positive": [], "false_negative": []}
         
         # Get corrected submissions
-        corrected = [s for s in submissions if s.get('corrected', False)]
+        corrected = [s for s in test_submissions if s.get('corrected', False)]
         
         false_positives = []
         false_negatives = []
@@ -393,6 +400,69 @@ class SentimentModel:
             "false_positive": fp_counter.most_common(5),
             "false_negative": fn_counter.most_common(5)
         }
+    
+    def generate_feedback(self, metrics):
+        """Generate recommendations based on test performance"""
+        feedback = []
+        
+        # Check accuracy
+        if metrics['accuracy'] < 0.7:
+            feedback.append({
+                "type": "warning",
+                "message": "Model accuracy is below 70% - significant improvement needed",
+                "suggestions": [
+                    "Add more diverse training examples",
+                    "Retrain with more epochs",
+                    "Focus on adding examples of frequently confused terms"
+                ]
+            })
+        elif metrics['accuracy'] < 0.85:
+            feedback.append({
+                "type": "info",
+                "message": "Model accuracy is moderate - some improvement possible",
+                "suggestions": [
+                    "Add more examples for edge cases",
+                    "Consider retraining with your feedback"
+                ]
+            })
+        else:
+            feedback.append({
+                "type": "success",
+                "message": "Model accuracy is good (>85%)",
+                "suggestions": [
+                    "Continue testing with more diverse examples",
+                    "Model appears to be performing well"
+                ]
+            })
+        
+        # Check balance between positive and negative accuracy
+        pos_acc = metrics['positive_accuracy']
+        neg_acc = metrics['negative_accuracy']
+        
+        if abs(pos_acc - neg_acc) > 0.2 and min(pos_acc, neg_acc) < 0.7:
+            imbalanced_class = "positive" if pos_acc < neg_acc else "negative"
+            feedback.append({
+                "type": "warning",
+                "message": f"Model shows imbalance - poor at detecting {imbalanced_class} sentiment",
+                "suggestions": [
+                    f"Add more training examples for {imbalanced_class} sentiment",
+                    f"Focus on correcting {imbalanced_class} predictions"
+                ]
+            })
+        
+        # Check number of corrections
+        stats = metrics['stats']
+        if stats['corrected'] >= 3:
+            feedback.append({
+                "type": "warning",
+                "message": f"{stats['corrected']} predictions have been corrected - retraining recommended",
+                "suggestions": [
+                    "Retrain model to incorporate your feedback",
+                    "This will help the model learn from its mistakes"
+                ]
+            })
+        
+        return feedback
 
 # Initialize session state
 if 'model' not in st.session_state:
@@ -407,6 +477,8 @@ if 'batch_results' not in st.session_state:
     st.session_state.batch_results = []
 if 'batch_index' not in st.session_state:
     st.session_state.batch_index = 0
+if 'batch_text' not in st.session_state:
+    st.session_state.batch_text = ""
 
 # App title and description
 st.title("Machine Learning Sentiment Analysis Demo")
@@ -629,55 +701,50 @@ with tab2:
             Enter up to 10 examples (one per line) or use random samples.
             """)
             
+            # Generate batch samples button
+            if st.button("Generate 10 Samples"):
+                batch_samples = [
+                    "This was very informative and helpful",
+                    "I didn't understand most of the examples",
+                    "The presentation was engaging and clear",
+                    "Too much information in too little time",
+                    "I learned a lot from this workshop",
+                    "The speaker seemed unprepared",
+                    "Great examples that made sense",
+                    "The content was too basic for me",
+                    "I'm excited to try these techniques",
+                    "The slides were confusing and cluttered"
+                ]
+                st.session_state.batch_text = "\n".join(batch_samples)
+            
             # Batch text input
             batch_text = st.text_area(
                 "Enter up to 10 examples (one per line):", 
+                value=st.session_state.batch_text,
                 height=150,
                 placeholder="Enter one example per line or click 'Generate 10 Samples'"
             )
             
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                # Generate batch samples
-                if st.button("Generate 10 Samples"):
-                    batch_samples = [
-                        "This was very informative and helpful",
-                        "I didn't understand most of the examples",
-                        "The presentation was engaging and clear",
-                        "Too much information in too little time",
-                        "I learned a lot from this workshop",
-                        "The speaker seemed unprepared",
-                        "Great examples that made sense",
-                        "The content was too basic for me",
-                        "I'm excited to try these techniques",
-                        "The slides were confusing and cluttered"
-                    ]
-                    batch_text = "\n".join(batch_samples)
-                    # Force a rerun to update the text area
-                    st.experimental_rerun()
-            
-            with col2:
-                # Analyse batch
-                if st.button("Analyse Batch") and batch_text:
-                    # Split text into lines and filter out empty lines
-                    lines = [line.strip() for line in batch_text.split("\n") if line.strip()]
-                    
-                    # Limit to 10 examples
-                    lines = lines[:10]
-                    
-                    # Process each example
-                    batch_results = []
-                    for line in lines:
-                        prediction = st.session_state.model.predict(line)
-                        batch_results.append(prediction)
-                    
-                    # Save results to session state
-                    st.session_state.batch_results = batch_results
-                    st.session_state.batch_index = 0
-                    
-                    # Force a rerun to show the results
-                    st.experimental_rerun()
+            # Analyse batch
+            if st.button("Analyse Batch") and batch_text:
+                # Split text into lines and filter out empty lines
+                lines = [line.strip() for line in batch_text.split("\n") if line.strip()]
+                
+                # Limit to 10 examples
+                lines = lines[:10]
+                
+                # Process each example
+                batch_results = []
+                for line in lines:
+                    prediction = st.session_state.model.predict(line)
+                    batch_results.append(prediction)
+                
+                # Save results to session state
+                st.session_state.batch_results = batch_results
+                st.session_state.batch_index = 0
+                
+                # Force a rerun to show the results
+                st.experimental_rerun()
             
             # Display batch results
             if st.session_state.batch_results:
@@ -823,16 +890,19 @@ with tab2:
 
 # Results tab content
 with tab3:
-    st.header("Results & Analysis")
+    st.header("Test Results & Analysis")
     
-    if not st.session_state.submissions:
-        st.info("Make some predictions first to see analysis here.")
+    # Calculate model performance metrics based on test data only
+    metrics = st.session_state.model.evaluate_model_performance(st.session_state.submissions)
+    
+    # Get only test data (not training data)
+    test_submissions = [s for s in st.session_state.submissions if s.get('is_test', True)]
+    
+    if not test_submissions:
+        st.info("Make some predictions first to see test results here.")
     else:
-        # Calculate model performance metrics
-        metrics = st.session_state.model.evaluate_model_performance(st.session_state.submissions)
-        
-        # Create columns for metrics
-        st.markdown("### Model Performance")
+        # Display model performance metrics
+        st.markdown("### Model Performance on Test Data")
         
         col1, col2, col3 = st.columns(3)
         
@@ -869,16 +939,16 @@ with tab3:
             corrected_percent = (stats['corrected']/stats['total']*100) if stats['total'] > 0 else 0
             
             st.markdown(f"""
-            - **Total predictions:** {stats['total']}
+            - **Total test predictions:** {stats['total']}
             - **Correct predictions:** {stats['correct']} ({correct_percent:.1f}%)
             - **Corrected predictions:** {stats['corrected']} ({corrected_percent:.1f}%)
             """)
         
         # Corrected examples analysis
-        st.markdown("### Corrected Examples Analysis")
+        st.markdown("### Corrected Test Examples")
         
         # Find examples that were corrected
-        corrected_examples = [s for s in st.session_state.submissions if s.get('corrected', False)]
+        corrected_examples = [s for s in test_submissions if s.get('corrected', False)]
         
         if corrected_examples:
             st.markdown(f"Found **{len(corrected_examples)}** examples where the model prediction was corrected:")
@@ -909,7 +979,7 @@ with tab3:
                 )
             
             # Get features that commonly lead to confusion
-            confusion_terms = st.session_state.model.get_confusion_terms(st.session_state.submissions)
+            confusion_terms = st.session_state.model.get_confusion_terms(test_submissions)
             
             st.markdown("#### Common Confusion Terms")
             
@@ -931,7 +1001,7 @@ with tab3:
                 else:
                     st.markdown("*No data yet*")
         else:
-            st.info("No corrected predictions yet. Provide feedback on predictions to see analysis here.")
+            st.info("No corrected test predictions yet. Provide feedback on predictions to see analysis here.")
         
         # Feature importance
         st.markdown("### Feature Importance Analysis")
@@ -975,32 +1045,28 @@ with tab3:
             st.info("Train the model first to see feature importance.")
         
         # Model improvement recommendations
-        st.markdown("### Model Improvement Recommendations")
+        st.markdown("### Model Verdict and Recommendations")
         
-        # Check if retraining is needed
-        retraining_needed = len(corrected_examples) >= 3
+        # Generate feedback based on metrics
+        feedback = st.session_state.model.generate_feedback(metrics)
         
-        # Accuracy threshold
-        good_accuracy = metrics['accuracy'] >= 0.8
-        
-        if not good_accuracy:
-            st.warning("""
-            **Model accuracy is below 80%**
+        for item in feedback:
+            if item["type"] == "warning":
+                st.warning(item["message"])
+            elif item["type"] == "info":
+                st.info(item["message"])
+            elif item["type"] == "success":
+                st.success(item["message"])
             
-            Consider these improvements:
-            1. Add more training examples, especially for cases where the model is confused
-            2. Retrain the model with more epochs
-            3. Review the confused terms above and provide more examples of those
-            """)
+            # Display suggestions
+            if item["suggestions"]:
+                st.markdown("**Suggestions:**")
+                for suggestion in item["suggestions"]:
+                    st.markdown(f"- {suggestion}")
         
-        if retraining_needed:
-            st.warning("""
-            **Multiple predictions have been corrected**
-            
-            The model would likely benefit from retraining with the new feedback.
-            """)
-            
-            if st.button("Retrain Model with Feedback", key="retrain_button"):
+        # Retraining button if needed
+        if any(item["type"] == "warning" for item in feedback):
+            if st.button("Retrain Model with Test Feedback", key="retrain_button"):
                 st.info("Retraining model with all feedback data...")
                 
                 # Create progress indicators
@@ -1037,7 +1103,5 @@ with tab3:
         - **Confusion decreases**: The model learns from its mistakes 
         - **Generalizes better**: The model performs well on new, unseen text
         
-        This simulates how real-world ML systems improve through human feedback, but simplified
-        to make the process visible and interactive. In production systems, this feedback loop
-        can involve millions of examples and complex deep learning models.
+        This simulates how real-world ML systems improve through human feedback.
         """)
